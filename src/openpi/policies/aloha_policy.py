@@ -13,7 +13,7 @@ def make_aloha_example() -> dict:
         "state": np.ones((14,)),
         "images": {
             "cam_high": np.random.randint(256, size=(3, 224, 224), dtype=np.uint8),
-            "cam_low": np.random.randint(256, size=(3, 224, 224), dtype=np.uint8),
+            # "cam_low": np.random.randint(256, size=(3, 224, 224), dtype=np.uint8),
             "cam_left_wrist": np.random.randint(256, size=(3, 224, 224), dtype=np.uint8),
             "cam_right_wrist": np.random.randint(256, size=(3, 224, 224), dtype=np.uint8),
         },
@@ -40,7 +40,7 @@ class AlohaInputs(transforms.DataTransformFn):
 
     # The expected cameras names. All input cameras must be in this set. Missing cameras will be
     # replaced with black images and the corresponding `image_mask` will be set to False.
-    EXPECTED_CAMERAS: ClassVar[tuple[str, ...]] = ("cam_high", "cam_low", "cam_left_wrist", "cam_right_wrist")
+    EXPECTED_CAMERAS: ClassVar[tuple[str, ...]] = ("cam_high", "cam_left_wrist", "cam_right_wrist")
 
     def __call__(self, data: dict) -> dict:
         data = _decode_aloha(data, adapt_to_pi=self.adapt_to_pi)
@@ -161,7 +161,7 @@ def _gripper_from_angular_inv(value):
 
 
 def _decode_aloha(data: dict, *, adapt_to_pi: bool = False) -> dict:
-    # state is [left_arm_joint_angles, right_arm_joint_angles, left_arm_gripper, right_arm_gripper]
+    # state is [left_arm_joint_angles, left_arm_gripper, right_arm_joint_angles, right_arm_gripper]
     # dim sizes: [6, 1, 6, 1]
     state = np.asarray(data["state"])
     state = _decode_state(state, adapt_to_pi=adapt_to_pi)

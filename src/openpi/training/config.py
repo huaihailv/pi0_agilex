@@ -582,6 +582,41 @@ _CONFIGS = [
     # This is a test config that is used to illustate how train on a custom LeRobot dataset.
     # For instuctions on how to convert and train on your own Aloha dataset see examples/aloha_real/README.md
     TrainConfig(
+        name="pi0_aloha_stack_basket",
+        model=pi0.Pi0Config(),
+        data=LeRobotAlohaDataConfig(
+            repo_id="HuaihaiLyu/stack_basket",
+            assets=AssetsConfig(
+                assets_dir="s3://openpi-assets/checkpoints/pi0_base/assets",
+                asset_id="trossen",
+            ),
+            default_prompt="stack the brown basket on the black basket",
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.cam_high",
+                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_right_wrist": "observation.images.cam_right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                        }
+                    )
+                ]
+            ),
+            base_config=DataConfig(
+                local_files_only=True,  # Set to True for local-only datasets.
+                prompt_from_task=True,
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_base/params"),
+        num_train_steps=50_000,
+    ),
+    # This is a test config that is used to illustate how train on a custom LeRobot dataset.
+    # For instuctions on how to convert and train on your own Aloha dataset see examples/aloha_real/README.md
+    TrainConfig(
         name="pi0_aloha_pen_uncap",
         model=pi0.Pi0Config(),
         data=LeRobotAlohaDataConfig(

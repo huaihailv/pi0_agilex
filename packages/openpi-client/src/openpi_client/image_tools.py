@@ -25,7 +25,7 @@ def resize_with_pad(images: np.ndarray, height: int, width: int, method=Image.BI
         The resized images in [..., height, width, channel].
     """
     # If the images are already the correct size, return them as is.
-    if images.shape[-3:-1] == (height, width):
+    if images.shape[-3:-1] == (height, width): # (1280, 3, 720)
         return images
 
     original_shape = images.shape
