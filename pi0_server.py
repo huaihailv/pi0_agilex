@@ -1,0 +1,1 @@
+/share/project/lvhuaihai/lvhuaihai/openpi/scripts/pi0_server.py

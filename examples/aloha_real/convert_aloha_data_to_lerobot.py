@@ -4,7 +4,7 @@ Script to convert Aloha hdf5 data to the LeRobot dataset v2.0 format.
 Example usage: 
 uv run examples/aloha_real/convert_aloha_data_to_lerobot.py --raw-dir /mnt/hpfs/baaiei/robot_data/agilex/stack_basket/task_put_brown_black_basket_4.1 --repo-id HuaihaiLyu/stack_basket  --mode="video"  --task="stack the brown basket on the black basket"
 uv run examples/aloha_real/convert_aloha_data_to_lerobot.py --raw-dir /mnt/hpfs/baaiei/robot_data/agilex/groceries_dual/task_take_brown_long_bread_Egg_yolk_pasry_4.3 --repo-id HuaihaiLyu/groceries  --mode="video"  --task="Pick the brown long bread and Egg yolk pasry into package"
-
+uv run examples/aloha_real/convert_aloha_data_to_lerobot.py --raw-dir /mnt/hpfs/baaiei/robot_data/realman/18.37realman  --repo_id=HuaihaiLyu/test --task="realman test"  --mode="video" 
 """
 
 import dataclasses
@@ -20,7 +20,7 @@ import numpy as np
 import torch
 import tqdm
 import tyro
-
+import pdb
 
 @dataclasses.dataclass(frozen=True)
 class DatasetConfig:
@@ -70,16 +70,12 @@ def create_empty_dataset(
         "observation.state": {
             "dtype": "float32",
             "shape": (len(motors),),
-            "names": [
-                motors,
-            ],
+            "names": {"motors":motors},
         },
         "action": {
             "dtype": "float32",
             "shape": (len(motors),),
-            "names": [
-                motors,
-            ],
+            "names": {"motors":motors},
         },
     }
 
@@ -148,19 +144,18 @@ def load_raw_images_per_camera(ep: h5py.File, cameras: list[str]) -> dict[str, n
     imgs_per_cam = {}
     for camera in cameras:
         uncompressed = ep[f"/observations/images/{camera}"].ndim == 4
-
+        print(uncompressed)
+        print(camera)
         if uncompressed:
             # load all images in RAM
             imgs_array = ep[f"/observations/images/{camera}"][:]
         else:
             import cv2
-
             # load one compressed image after the other in RAM and uncompress
             imgs_array = []
             for data in ep[f"/observations/images/{camera}"]:
                 imgs_array.append(cv2.cvtColor(cv2.imdecode(data, 1), cv2.COLOR_BGR2RGB))
             imgs_array = np.array(imgs_array)
-
         imgs_per_cam[camera] = imgs_array
     return imgs_per_cam
 
@@ -171,8 +166,6 @@ def qpos_2_joint_positions(qpos:np.ndarray):
         l_gripper_pos = np.array([qpos[:,60]]).reshape(-1,1)
         r_gripper_pos = np.array([qpos[:,10]]).reshape(-1,1)
 
-        # import pdb
-        # pdb.set_trace()
         l_pos = np.concatenate((l_joint_pos,l_gripper_pos), axis=1)
         r_pos = np.concatenate((r_joint_pos,r_gripper_pos), axis=1)
 
@@ -182,6 +175,7 @@ def load_raw_episode_data(
     ep_path: Path,
 ) -> tuple[dict[str, np.ndarray], torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
     with h5py.File(ep_path, "r") as ep:
+        print(ep_path)
         state = torch.from_numpy(qpos_2_joint_positions(ep["/observations/qpos"][:]))
         action = torch.from_numpy(qpos_2_joint_positions(ep["/action"][:]))
 
@@ -197,7 +191,6 @@ def load_raw_episode_data(
             ep,
             [
                 "cam_high",
-                # "cam_low",
                 "cam_left_wrist",
                 "cam_right_wrist",
             ],
@@ -226,7 +219,6 @@ def populate_dataset(
                 "observation.state": state[i],
                 "action": action[i],
             }
-            # import pdb; pdb.set_trace()
             for camera, img_array in imgs_per_cam.items():
                 frame[f"observation.images.{camera}"] = img_array[i]
 
@@ -254,8 +246,7 @@ def port_aloha(
     mode: Literal["video", "image"] = "image",
     dataset_config: DatasetConfig = DEFAULT_DATASET_CONFIG,
 ):
-    # import pdb
-    # pdb.set_trace()
+
     if (LEROBOT_HOME / repo_id).exists():
         shutil.rmtree(LEROBOT_HOME / repo_id)
         # 删除已存在目录
@@ -297,3 +288,4 @@ if __name__ == "__main__":
 #     --mode="video"
 
 # python /mnt/hpfs/baaiei/lvhuaihai/openpi/examples/aloha_real/convert_aloha_data_to_lerobot.py --raw_dir="/mnt/hpfs/baaiei/lvhuaihai/agilex_data/test/task_put_black_brown_basket_4.1"  --repo_id="/mnt/hpfs/baaiei/lvhuaihai/agilex_data/test/save" --task="DEBUG"  --mode="video" 
+# python /mnt/hpfs/baaiei/lvhuaihai/openpi/examples/aloha_real/convert_aloha_data_to_lerobot.py --raw_dir="/mnt/hpfs/baaiei/robot_data/realman/18.37realman"  --repo_id=HuaihaiLyu/test --task="realman test"  --mode="video" 

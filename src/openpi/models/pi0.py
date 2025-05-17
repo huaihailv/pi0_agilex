@@ -73,7 +73,7 @@ class Pi0Config(_model.BaseModelConfig):
     # Set the model specific defaults.
     action_dim: int = 32
     action_horizon: int = 50
-    max_token_len: int = 48
+    max_token_len: int = 60
 
     @property
     @override
@@ -262,7 +262,13 @@ class Pi0(_model.BaseModel):
             [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions
         )
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
-
+        
+        # jax.debug.print("v_t0: {}", v_t[0][0])
+        # jax.debug.print("u_t0: {}", u_t[0][0])
+        # jax.debug.print("v_t10: {}", v_t[0][10])
+        # jax.debug.print("u_t10: {}", u_t[0][10])
+        # jax.debug.print("action_0: {}", actions[0][0])
+        # jax.debug.print("action_10: {}", actions[0][10])
         return jnp.mean(jnp.square(v_t - u_t), axis=-1)
 
     @override

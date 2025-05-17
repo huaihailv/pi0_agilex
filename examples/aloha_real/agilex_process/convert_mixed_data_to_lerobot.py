@@ -1,0 +1,341 @@
+"""
+Script to convert Aloha hdf5 data to the LeRobot dataset v2.0 format.
+
+Example usage: 
+uv run examples/aloha_real/convert_mixed_data_to_lerobot.py --raw-dir /mnt/hpfs/baaiei/robot_data/agilex/stack_basket/task_put_brown_black_basket_4.1 --repo-id HuaihaiLyu/stack_basket  --mode="video"  --task="stack the brown basket on the black basket"
+uv run examples/aloha_real/convert_aloha_data_to_lerobot.py --raw-dir /mnt/hpfs/baaiei/robot_data/agilex/groceries_dual/task_take_brown_long_bread_Egg_yolk_pasry_4.3 --repo-id HuaihaiLyu/groceries  --mode="video"  --task="Pick the brown long bread and Egg yolk pasry into package"
+uv run examples/aloha_real/convert_aloha_data_to_lerobot.py --raw-dir /mnt/hpfs/baaiei/robot_data/realman/18.37realman  --repo_id=HuaihaiLyu/test --task="realman test"  --mode="video" 
+"""
+
+import dataclasses
+from pathlib import Path
+import shutil
+from typing import Literal
+
+import h5py
+from lerobot.common.datasets.lerobot_dataset import LEROBOT_HOME
+from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.common.datasets.push_dataset_to_hub._download_raw import download_raw
+import numpy as np
+import torch
+import tqdm
+import tyro
+import pdb
+import pytransform3d.rotations as rotations
+
+@dataclasses.dataclass(frozen=True)
+class DatasetConfig:
+    use_videos: bool = True
+    tolerance_s: float = 0.0001
+    image_writer_processes: int = 10
+    image_writer_threads: int = 5
+    video_backend: str | None = None
+
+
+DEFAULT_DATASET_CONFIG = DatasetConfig()
+
+
+def create_empty_dataset(
+    repo_id: str,
+    robot_type: str,
+    mode: Literal["video", "image"] = "video",
+    *,
+    has_velocity: bool = False,
+    has_effort: bool = False,
+    dataset_config: DatasetConfig = DEFAULT_DATASET_CONFIG,
+) -> LeRobotDataset:
+    motors = [
+        "left_joint_position1",
+        "left_joint_position2",
+        "left_joint_position3",
+        "left_joint_position4",
+        "left_joint_position5",
+        "left_joint_position6",
+        "left_gripper",
+        "right_joint_position1",
+        "right_joint_position2",
+        "right_joint_position3",
+        "right_joint_position4",
+        "right_joint_position5",
+        "right_joint_position6",
+        "right_gripper",
+        "left_x",
+        "left_y",
+        "left_z",
+        "left_delta_x",
+        "left_delta_y",
+        "left_delta_z",
+        "right_x",
+        "right_y",
+        "right_z",
+        "right_delta_x",
+        "right_delta_y",
+        "right_delta_z",
+    ]
+    cameras = [
+        "cam_high",
+        # "cam_low",
+        "cam_left_wrist",
+        "cam_right_wrist",
+    ]
+
+    features = {
+        "observation.state": {
+            "dtype": "float32",
+            "shape": (len(motors),),
+            "names": {"motors":motors},
+        },
+        "action": {
+            "dtype": "float32",
+            "shape": (len(motors),),
+            "names": {"motors":motors},
+        },
+    }
+
+    if has_velocity:
+        features["observation.velocity"] = {
+            "dtype": "float32",
+            "shape": (len(motors),),
+            "names": [
+                motors,
+            ],
+        }
+
+    if has_effort:
+        features["observation.effort"] = {
+            "dtype": "float32",
+            "shape": (len(motors),),
+            "names": [
+                motors,
+            ],
+        }
+
+    for cam in cameras:
+        features[f"observation.images.{cam}"] = {
+            "dtype": mode,
+            "shape": (3, 480, 640),
+            "names": [
+                "channels",
+                "height",
+                "width",
+            ],
+        }
+
+    if Path(LEROBOT_HOME / repo_id).exists():
+        shutil.rmtree(LEROBOT_HOME / repo_id)
+
+    return LeRobotDataset.create(
+        repo_id=repo_id,
+        fps=30,
+        robot_type=robot_type,
+        features=features,
+        use_videos=dataset_config.use_videos,
+        tolerance_s=dataset_config.tolerance_s,
+        image_writer_processes=dataset_config.image_writer_processes,
+        image_writer_threads=dataset_config.image_writer_threads,
+        video_backend=dataset_config.video_backend,
+    )
+
+
+def get_cameras(hdf5_files: list[Path]) -> list[str]:
+    with h5py.File(hdf5_files[0], "r") as ep:
+        # ignore depth channel, not currently handled
+        return [key for key in ep["/observations/images"].keys() if "depth" not in key]  # noqa: SIM118
+
+
+def has_velocity(hdf5_files: list[Path]) -> bool:
+    with h5py.File(hdf5_files[0], "r") as ep:
+        return "/observations/qvel" in ep
+
+
+def has_effort(hdf5_files: list[Path]) -> bool:
+    with h5py.File(hdf5_files[0], "r") as ep:
+        return "/observations/effort" in ep
+
+
+def load_raw_images_per_camera(ep: h5py.File, cameras: list[str]) -> dict[str, np.ndarray]:
+    imgs_per_cam = {}
+    for camera in cameras:
+        uncompressed = ep[f"/observations/images/{camera}"].ndim == 4
+        print(uncompressed)
+        print(camera)
+        if uncompressed:
+            # load all images in RAM
+            imgs_array = ep[f"/observations/images/{camera}"][:]
+        else:
+            import cv2
+            # load one compressed image after the other in RAM and uncompress
+            imgs_array = []
+            for data in ep[f"/observations/images/{camera}"]:
+                imgs_array.append(cv2.cvtColor(cv2.imdecode(data, 1), cv2.COLOR_BGR2RGB))
+            imgs_array = np.array(imgs_array)
+        imgs_per_cam[camera] = imgs_array
+    return imgs_per_cam
+
+def qpos_2_joint_positions(qpos:np.ndarray):
+
+        l_joint_pos = qpos[:, 50:56]
+        r_joint_pos = qpos[:, 0:6]
+        l_gripper_pos = np.array([qpos[:,60]]).reshape(-1,1)
+        r_gripper_pos = np.array([qpos[:,10]]).reshape(-1,1)
+
+        l_pos = np.concatenate((l_joint_pos,l_gripper_pos), axis=1)
+        r_pos = np.concatenate((r_joint_pos,r_gripper_pos), axis=1)
+
+        return np.concatenate((l_pos,r_pos), axis=1)
+    
+def pose6D2quat(self, pose:np.ndarray):
+        
+        column_1 = pose[:3]
+        column_2 = pose[3:]
+
+        R = np.column_stack((column_1, column_2, np.cross(column_1, column_2)))
+
+        # quat = rotations.quaternion_from_matrix(R)
+        euler = rotations.euler_from_matrix(R, 0,1,2, extrinsic=True)
+        
+        return euler
+    
+def qpos_2_ee_pose(self, qpos:np.ndarray):
+
+        # r_joint_pos = qpos[0:10]
+        # l_joint_pos = qpos[50:60]
+
+        # l_gripper_joint_pos = qpos[60:65]
+        # r_gripper_joint_pos = qpos[25:30]
+
+        # l_pose6d = qpos[83:89]
+        # r_pose6d = qpos[33:39]
+        # l_quat = pose6D2quat(l_pose6d)
+        # r_quat = pose6D2quat(r_pose6d)
+        l_pose6d = qpos[83:89]
+        r_pose6d = qpos[33:39]
+        l_quat = self.pose6D2quat(l_pose6d)
+        r_quat = self.pose6D2quat(r_pose6d)
+        l_ee_trans = qpos[80:83]
+        r_ee_trans = qpos[30:33]
+        l_gripper_pos = np.array([qpos[60]])
+        r_gripper_pos = np.array([qpos[10]])
+        # import pdb
+        # pdb.set_trace()
+        return np.concatenate((l_ee_trans, l_quat, l_gripper_pos, r_ee_trans, r_quat, r_gripper_pos))
+    
+
+def load_raw_episode_data(
+    ep_path: Path,
+) -> tuple[dict[str, np.ndarray], torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    with h5py.File(ep_path, "r") as ep:
+        print(ep_path)
+        state = torch.from_numpy(np.concatenate((qpos_2_joint_positions(ep["/observations/qpos"][:]), qpos_2_ee_pose(ep["/observations/qpos"][:]))))
+        action = torch.from_numpy(np.concatenate((qpos_2_joint_positions(ep["/observations/qpos"][:]), qpos_2_ee_pose(ep["/observations/qpos"][:]))))
+
+        velocity = None
+        if "/observations/qvel" in ep:
+            velocity = torch.from_numpy(ep["/observations/qvel"][:])
+
+        effort = None
+        if "/observations/effort" in ep:
+            effort = torch.from_numpy(ep["/observations/effort"][:])
+
+        imgs_per_cam = load_raw_images_per_camera(
+            ep,
+            [
+                "cam_high",
+                "cam_left_wrist",
+                "cam_right_wrist",
+            ],
+        )
+
+    return imgs_per_cam, state, action, velocity, effort
+
+
+def populate_dataset(
+    dataset: LeRobotDataset,
+    hdf5_files: list[Path],
+    task: str,
+    episodes: list[int] | None = None,
+) -> LeRobotDataset:
+    if episodes is None:
+        episodes = range(len(hdf5_files))
+
+    for ep_idx in tqdm.tqdm(episodes):
+        ep_path = hdf5_files[ep_idx]
+
+        imgs_per_cam, state, action, velocity, effort = load_raw_episode_data(ep_path)
+        num_frames = state.shape[0]
+
+        for i in range(num_frames):
+            frame = {
+                "observation.state": state[i],
+                "action": action[i],
+            }
+            for camera, img_array in imgs_per_cam.items():
+                frame[f"observation.images.{camera}"] = img_array[i]
+
+            if velocity is not None:
+                frame["observation.velocity"] = velocity[i]
+            if effort is not None:
+                frame["observation.effort"] = effort[i]
+
+            dataset.add_frame(frame)
+
+        dataset.save_episode(task=task)
+
+    return dataset
+
+
+def port_aloha(
+    raw_dir: Path, # hdf5 path
+    repo_id: str,
+    raw_repo_id: str | None = None,
+    task: str = "DEBUG",
+    *,
+    episodes: list[int] | None = None,
+    push_to_hub: bool = True,
+    is_mobile: bool = False,
+    mode: Literal["video", "image"] = "image",
+    dataset_config: DatasetConfig = DEFAULT_DATASET_CONFIG,
+):
+
+    if (LEROBOT_HOME / repo_id).exists():
+        shutil.rmtree(LEROBOT_HOME / repo_id)
+        # 删除已存在目录
+
+    if not raw_dir.exists():
+        if raw_repo_id is None:
+            raise ValueError("raw_repo_id must be provided if raw_dir does not exist")
+        download_raw(raw_dir, repo_id=raw_repo_id)
+
+    hdf5_files = sorted(raw_dir.glob("episode_*.hdf5"))
+
+    dataset = create_empty_dataset(
+        repo_id,
+        robot_type="mobile_aloha" if is_mobile else "aloha",
+        mode=mode,
+        has_effort=has_effort(hdf5_files),
+        has_velocity=has_velocity(hdf5_files),
+        dataset_config=dataset_config,
+    )
+    dataset = populate_dataset(
+        dataset,
+        hdf5_files,
+        task=task,
+        episodes=episodes,
+    )
+    dataset.consolidate()
+
+    if push_to_hub:
+        dataset.push_to_hub(repo_id)
+
+
+if __name__ == "__main__":
+    tyro.cli(port_aloha)
+    
+# python /mnt/hpfs/baaiei/lvhuaihai/openpi/examples/aloha_real/convert_aloha_data_to_lerobot.py \
+#     --raw_dir="/mnt/hpfs/baaiei/lvhuaihai/agilex_data/test/task_put_black_brown_basket_4.1" \
+#     --repo_id="/mnt/hpfs/baaiei/lvhuaihai/agilex_data/test/save" \
+#     --task="DEBUG" \
+#     --mode="video"
+
+# python /mnt/hpfs/baaiei/lvhuaihai/openpi/examples/aloha_real/convert_aloha_data_to_lerobot.py --raw_dir="/mnt/hpfs/baaiei/lvhuaihai/agilex_data/test/task_put_black_brown_basket_4.1"  --repo_id="/mnt/hpfs/baaiei/lvhuaihai/agilex_data/test/save" --task="DEBUG"  --mode="video" 
+# python /mnt/hpfs/baaiei/lvhuaihai/openpi/examples/aloha_real/convert_aloha_data_to_lerobot.py --raw_dir="/mnt/hpfs/baaiei/robot_data/realman/18.37realman"  --repo_id=HuaihaiLyu/test --task="realman test"  --mode="video" 

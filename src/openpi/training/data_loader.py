@@ -116,15 +116,28 @@ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip
             )
         norm_stats = data_config.norm_stats
 
-    return TransformedDataset(
-        dataset,
-        [
-            *data_config.repack_transforms.inputs,
-            *data_config.data_transforms.inputs,
-            _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
-            *data_config.model_transforms.inputs,
-        ],
-    )
+    if data_config.prompt_from_task:
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(data_config.repo_id, local_files_only=data_config.local_files_only)
+        return TransformedDataset(
+            dataset, 
+                [
+                    *data_config.repack_transforms.inputs,
+                    _transforms.PromptFromLeRobotTask(dataset_meta.tasks),
+                    *data_config.data_transforms.inputs,
+                    _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+                    *data_config.model_transforms.inputs,
+                ],
+            )
+    else:
+        return TransformedDataset(
+            dataset,
+            [
+                *data_config.repack_transforms.inputs,
+                *data_config.data_transforms.inputs,
+                _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+                *data_config.model_transforms.inputs,
+            ],
+        )
 
 
 def create_data_loader(
@@ -236,6 +249,8 @@ class TorchDataLoader:
             num_workers=num_workers,
             multiprocessing_context=mp_context,
             persistent_workers=num_workers > 0,
+            prefetch_factor=8,         # ⚡ 每个worker预取8个batch
+            # pin_memory=True,           # ⚡ CPU到GPU拷贝快
             collate_fn=_collate_fn,
             worker_init_fn=_worker_init_fn,
             drop_last=True,

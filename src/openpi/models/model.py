@@ -28,7 +28,7 @@ class ModelType(enum.Enum):
 
     PI0 = "pi0"
     PI0_FAST = "pi0_fast"
-
+    PI0_MIXED = "pi0_mixed"
 
 # The model always expects these images
 IMAGE_KEYS = (
